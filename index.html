@@ -654,37 +654,92 @@ function drawPlayer(x,y,fx,hp,maxHp,downT,charIdx,slot,buff){
   const ch=CHARS[CHAR_ORDER[charIdx]]||CHARS.atirador;
   const ring = slot===0 ? '#4fc3f7' : '#ff8a65';
   const label = slot===0 ? 'P1' : 'P2';
+  const R=P_R;
+  // anel de time no chão (estilo Brawl Stars)
+  ctx.save();
+  ctx.strokeStyle=ring; ctx.lineWidth=4; ctx.globalAlpha=0.9;
+  ctx.beginPath(); ctx.ellipse(x,y+R*0.9,R*1.05,R*0.42,0,0,7); ctx.stroke();
+  ctx.globalAlpha=0.18; ctx.fillStyle=ring; ctx.beginPath(); ctx.ellipse(x,y+R*0.9,R*1.05,R*0.42,0,0,7); ctx.fill();
+  ctx.restore();
+
   if(downT>0){
-    ctx.fillStyle='rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(x,y+P_R-2,P_R*.9,8,0,0,7); ctx.fill();
-    ctx.globalAlpha=0.55; ctx.fillStyle=ch.d;
-    ctx.beginPath(); ctx.arc(x,y,P_R*0.9,0,7); ctx.fill(); ctx.globalAlpha=1;
-    ctx.font='700 22px system-ui'; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
-    ctx.fillStyle='#fff'; ctx.fillText('💫',x,y+8);
-    ctx.fillStyle='#ffd93d'; ctx.font='700 13px system-ui'; ctx.fillText('revive '+Math.ceil(downT)+'s',x,y-P_R-14);
+    ctx.globalAlpha=0.5; ctx.fillStyle=ch.d;
+    ctx.beginPath(); ctx.arc(x,y,R*0.7,0,7); ctx.fill(); ctx.globalAlpha=1;
+    ctx.font='700 22px system-ui'; ctx.textAlign='center'; ctx.textBaseline='alphabetic'; ctx.fillStyle='#fff'; ctx.fillText('💫',x,y+6);
+    ctx.fillStyle='#ffd93d'; ctx.font='700 13px system-ui'; ctx.fillText('revive '+Math.ceil(downT)+'s',x,y-R-16);
     return;
   }
-  const bob=Math.sin(performance.now()/300 + slot*1.6)*2;
+
+  const t=performance.now();
+  const bob=Math.sin(t/300 + slot*1.6)*1.5;
+  const step=Math.sin(t/140 + slot)*2;
   const yy=y+bob;
-  ctx.fillStyle='rgba(0,0,0,.28)'; ctx.beginPath(); ctx.ellipse(x,y+P_R-3,P_R*.92,9,0,0,7); ctx.fill();
+  const side=fx>=0?1:-1;
+
   if(buff){ ctx.save(); ctx.globalAlpha=0.55; ctx.strokeStyle='#fff59d'; ctx.lineWidth=4;
-    ctx.beginPath(); ctx.arc(x,yy,P_R+7+Math.sin(performance.now()/120)*1.5,0,7); ctx.stroke(); ctx.restore(); }
-  // corpo com volume
-  const g=ctx.createRadialGradient(x-P_R*0.35,yy-P_R*0.4,P_R*0.2,x,yy,P_R);
-  g.addColorStop(0, lighten(ch.c,40)); g.addColorStop(1, ch.c);
-  ctx.fillStyle=g; ctx.strokeStyle=ring; ctx.lineWidth=5;
-  ctx.beginPath(); ctx.arc(x,yy,P_R,0,7); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x,yy-R*0.15,R+8+Math.sin(t/120)*1.5,0,7); ctx.stroke(); ctx.restore(); }
+
+  // sombra
+  ctx.fillStyle='rgba(0,0,0,.22)'; ctx.beginPath(); ctx.ellipse(x,y+R*0.92,R*0.7,R*0.24,0,0,7); ctx.fill();
+  // pezinhos (com passo)
+  ctx.fillStyle=ch.d;
+  ctx.beginPath(); ctx.ellipse(x-R*0.32,yy+R*0.62+step,R*0.22,R*0.16,0,0,7); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(x+R*0.32,yy+R*0.62-step,R*0.22,R*0.16,0,0,7); ctx.fill();
+  // corpo (cápsula)
+  const bodyGrad=ctx.createLinearGradient(x,yy-R*0.1,x,yy+R*0.7);
+  bodyGrad.addColorStop(0,lighten(ch.c,25)); bodyGrad.addColorStop(1,ch.c);
+  ctx.fillStyle=bodyGrad; ctx.strokeStyle=ch.d; ctx.lineWidth=3.5;
+  rrect(x-R*0.5,yy-R*0.05,R,R*0.78,R*0.4); ctx.fill(); ctx.stroke();
+  // bracinhos
+  ctx.fillStyle=ch.c; ctx.strokeStyle=ch.d; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.arc(x-R*0.55,yy+R*0.28,R*0.2,0,7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(x+R*0.55,yy+R*0.28,R*0.2,0,7); ctx.fill(); ctx.stroke();
+  // arma na mão da frente (por classe)
+  drawWeapon(ch.spec, x+side*R*0.6, yy+R*0.28, side, R);
+  // cabeça
+  const headY=yy-R*0.45, headR=R*0.6;
+  const hg=ctx.createRadialGradient(x-headR*0.35,headY-headR*0.35,headR*0.2,x,headY,headR);
+  hg.addColorStop(0,lighten(ch.c,45)); hg.addColorStop(1,lighten(ch.c,10));
+  ctx.fillStyle=hg; ctx.strokeStyle=ch.d; ctx.lineWidth=3.5;
+  ctx.beginPath(); ctx.arc(x,headY,headR,0,7); ctx.fill(); ctx.stroke();
   // brilho
-  ctx.fillStyle='rgba(255,255,255,.35)';
-  ctx.beginPath(); ctx.ellipse(x-P_R*0.32,yy-P_R*0.42,P_R*0.34,P_R*0.22,-0.6,0,7); ctx.fill();
-  // rosto (emoji)
-  ctx.font='24px system-ui'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(ch.emoji, x, yy+1); ctx.textBaseline='alphabetic';
+  ctx.fillStyle='rgba(255,255,255,.4)';
+  ctx.beginPath(); ctx.ellipse(x-headR*0.3,headY-headR*0.35,headR*0.3,headR*0.2,-0.6,0,7); ctx.fill();
+  // olhos (olham pro lado que anda)
+  const ex=side*headR*0.18;
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(x-headR*0.32+ex,headY-headR*0.05,headR*0.26,0,7); ctx.arc(x+headR*0.32+ex,headY-headR*0.05,headR*0.26,0,7); ctx.fill();
+  ctx.fillStyle='#222';
+  ctx.beginPath(); ctx.arc(x-headR*0.32+ex*1.6,headY-headR*0.05,headR*0.13,0,7); ctx.arc(x+headR*0.32+ex*1.6,headY-headR*0.05,headR*0.13,0,7); ctx.fill();
+  // emoji de classe (chapeuzinho)
+  ctx.font=(R*0.62)+'px system-ui'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(ch.emoji, x, headY-headR*0.95); ctx.textBaseline='alphabetic';
   // barra de vida + nome
-  const bw=54,bh=7,bx=x-bw/2,by=y-P_R-16;
+  const bw=54,bh=7,bx=x-bw/2,by=y-R-24;
   ctx.fillStyle='rgba(0,0,0,.55)'; rrect(bx-2,by-2,bw+4,bh+4,4); ctx.fill();
   ctx.fillStyle=hp>maxHp*.5?'#66bb6a':hp>maxHp*.25?'#ffca28':'#ef5350';
   rrect(bx,by,bw*Math.max(0,hp)/maxHp,bh,3); ctx.fill();
   ctx.fillStyle=ring; ctx.font='800 13px system-ui'; ctx.textAlign='center'; ctx.fillText(label,x,by-6);
+}
+function drawWeapon(spec,wx,wy,side,R){
+  ctx.save(); ctx.translate(wx,wy);
+  if(spec==='burst'){ // pistola
+    ctx.fillStyle='#455a64'; ctx.strokeStyle='#263238'; ctx.lineWidth=2;
+    rrect(-R*0.1,-R*0.12,R*0.55*side,R*0.24,3); ctx.fill(); ctx.stroke();
+  } else if(spec==='fireball'){ // cajado
+    ctx.strokeStyle='#8d6e63'; ctx.lineWidth=4; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(0,R*0.35); ctx.lineTo(side*R*0.15,-R*0.4); ctx.stroke(); ctx.lineCap='butt';
+    ctx.fillStyle='#ce93d8'; ctx.beginPath(); ctx.arc(side*R*0.15,-R*0.45,R*0.18,0,7); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.6)'; ctx.beginPath(); ctx.arc(side*R*0.1,-R*0.5,R*0.06,0,7); ctx.fill();
+  } else if(spec==='pound'){ // escudo
+    ctx.fillStyle='#90a4ae'; ctx.strokeStyle='#455a64'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(side*R*0.3,-R*0.28); ctx.lineTo(side*R*0.5,-R*0.05);
+    ctx.lineTo(side*R*0.3,R*0.28); ctx.lineTo(side*R*0.12,-R*0.02); ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else { // veloz: adaga
+    ctx.strokeStyle='#eeeeee'; ctx.lineWidth=4; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(0,R*0.15); ctx.lineTo(side*R*0.45,-R*0.28); ctx.stroke(); ctx.lineCap='butt';
+  }
+  ctx.restore();
 }
 function drawEnemy(x,y,ty,hp,flash){
   const t=ETYPE[ty];
