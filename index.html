@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Brawl Kids — Coop</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:#1a1035; font-family:system-ui, sans-serif; touch-action:none; user-select:none; -webkit-user-select:none; }
+  #game { display:block; width:100vw; height:100vh; }
+
+  .overlay {
+    position:fixed; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:18px; padding:24px;
+    background:radial-gradient(circle at 50% 30%, #2d1b5e 0%, #1a1035 70%);
+    z-index:10;
+  }
+  .hidden { display:none !important; }
+  h1 {
+    color:#ffd93d; font-size:min(11vw, 52px); letter-spacing:1px;
+    text-shadow:0 4px 0 #b8860b, 0 8px 18px rgba(0,0,0,.5);
+    transform:rotate(-2deg);
+  }
+  .sub { color:#b9a8e8; font-size:15px; margin-top:-10px; }
+  .btn {
+    font-size:20px; font-weight:800; color:#fff; border:none; cursor:pointer;
+    padding:16px 34px; border-radius:16px; min-width:240px;
+    box-shadow:0 5px 0 rgba(0,0,0,.35);
+  }
+  .btn:active { transform:translateY(3px); box-shadow:0 2px 0 rgba(0,0,0,.35); }
+  .btn-host { background:linear-gradient(#4fc3f7,#1e88e5); }
+  .btn-join { background:linear-gradient(#ff8a65,#e64a19); }
+  .btn-back { background:#4a3b7a; font-size:15px; min-width:0; padding:10px 22px; }
+  #codeInput {
+    font-size:34px; font-weight:800; text-align:center; letter-spacing:12px;
+    width:240px; padding:12px; border-radius:14px; border:3px solid #6a5acd;
+    background:#0f0a24; color:#ffd93d; text-transform:uppercase; outline:none;
+  }
+  .code-big {
+    font-size:min(20vw, 84px); font-weight:900; letter-spacing:16px;
+    color:#ffd93d; background:#0f0a24; padding:14px 20px 14px 36px;
+    border-radius:18px; border:3px dashed #6a5acd;
+  }
+  .msg { color:#e6ddff; font-size:16px; text-align:center; max-width:320px; line-height:1.5; }
+  .pulse { animation:pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity:.45; } }
+
+  #hud {
+    position:fixed; top:10px; left:0; right:0; display:flex; justify-content:center;
+    z-index:5; pointer-events:none;
+  }
+  #hud span {
+    background:rgba(15,10,36,.75); color:#8ef58a; font-size:13px; font-weight:700;
+    padding:6px 14px; border-radius:20px;
+  }
+</style>
+</head>
+<body>
+
+<!-- MENU -->
+<div id="menu" class="overlay">
+  <h1>BRAWL KIDS</h1>
+  <p class="sub">jogo cooperativo · 2 celulares na mesma wifi</p>
+  <button class="btn btn-host" id="btnHost">🎮 Criar sala</button>
+  <button class="btn btn-join" id="btnGoJoin">🔑 Entrar com código</button>
+</div>
+
+<!-- CRIANDO / AGUARDANDO -->
+<div id="waitScreen" class="overlay hidden">
+  <p class="msg">Fala esse código pro seu irmão digitar:</p>
+  <div class="code-big" id="codeShow">····</div>
+  <p class="msg pulse" id="waitMsg">Aguardando jogador 2...</p>
+  <button class="btn btn-back" id="btnCancelHost">Voltar</button>
+</div>
+
+<!-- ENTRAR -->
+<div id="joinScreen" class="overlay hidden">
+  <p class="msg">Digite o código da sala:</p>
+  <input id="codeInput" maxlength="4" autocomplete="off" placeholder="ABCD">
+  <button class="btn btn-join" id="btnJoin">Entrar!</button>
+  <p class="msg" id="joinMsg"></p>
+  <button class="btn btn-back" id="btnCancelJoin">Voltar</button>
+</div>
+
+<div id="hud" class="hidden"><span id="hudText">✓ Conectado</span></div>
+<canvas id="game"></canvas>
+
+<script>
+'use strict';
+// ============ CONFIG ============
+const PREFIX = 'brawlkids-v1-';
+const ARENA = { w: 1280, h: 720 };          // coordenadas lógicas
+const SPEED = 300;                           // px lógicos / segundo
+const SEND_HZ = 25;                          // envios de posição por segundo
+const PLAYER_R = 26;
+
+// ============ ELEMENTOS ============
+const $ = id => document.getElementById(id);
+const screens = { menu: $('menu'), wait: $('waitScreen'), join: $('joinScreen') };
+function showScreen(name) {
+  for (const k in screens) screens[k].classList.toggle('hidden', k !== name);
+  if (!name) for (const k in screens) screens[k].classList.add('hidden');
+}
+
+// ============ REDE (PeerJS) ============
+let peer = null, conn = null, isHost = false, connected = false;
+
+function randomCode() {
+  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // sem I e O pra não confundir
+  let c = '';
+  for (let i = 0; i < 4; i++) c += letters[Math.floor(Math.random() * letters.length)];
+  return c;
+}
+
+function cleanupPeer() {
+  connected = false;
+  if (conn) { try { conn.close(); } catch(e){} conn = null; }
+  if (peer) { try { peer.destroy(); } catch(e){} peer = null; }
+}
+
+function hostRoom() {
+  cleanupPeer();
+  isHost = true;
+  const code = randomCode();
+  $('codeShow').textContent = code;
+  $('waitMsg').textContent = 'Conectando ao servidor...';
+  showScreen('wait');
+
+  peer = new Peer(PREFIX + code);
+  peer.on('open', () => { $('waitMsg').textContent = 'Aguardando jogador 2...'; });
+  peer.on('connection', c => {
+    conn = c;
+    conn.on('open', startGame);
+    wireConn();
+  });
+  peer.on('error', err => {
+    if (err.type === 'unavailable-id') hostRoom(); // código repetido: sorteia outro
+    else { $('waitMsg').textContent = 'Erro de conexão. Tente de novo.'; }
+  });
+}
+
+function joinRoom(code) {
+  cleanupPeer();
+  isHost = false;
+  $('joinMsg').textContent = 'Procurando sala ' + code + '...';
+
+  peer = new Peer();
+  peer.on('open', () => {
+    conn = peer.connect(PREFIX + code, { reliable: false });
+    conn.on('open', startGame);
+    wireConn();
+    setTimeout(() => {
+      if (!connected) $('joinMsg').textContent = 'Sala não encontrada. Confere o código?';
+    }, 8000);
+  });
+  peer.on('error', err => {
+    if (err.type === 'peer-unavailable') $('joinMsg').textContent = 'Sala não encontrada. Confere o código?';
+    else $('joinMsg').textContent = 'Erro de conexão. Tente de novo.';
+  });
+}
+
+function wireConn() {
+  conn.on('data', onData);
+  conn.on('close', onDisconnect);
+  conn.on('error', onDisconnect);
+}
+
+function onDisconnect() {
+  if (!connected) return;
+  cleanupPeer();
+  gameOn = false;
+  $('hud').classList.add('hidden');
+  showScreen('menu');
+  alert('O outro jogador saiu da partida.');
+}
+
+// ============ ESTADO DO JOGO ============
+let gameOn = false;
+const me = { x: 0, y: 0, fx: 1 };                       // meu personagem
+const other = { x: 0, y: 0, fx: 1, tx: 0, ty: 0 };      // remoto (tx/ty = alvo p/ interpolar)
+
+function startGame() {
+  connected = true;
+  // host nasce à esquerda, convidado à direita
+  me.x = isHost ? ARENA.w * 0.3 : ARENA.w * 0.7;
+  me.y = ARENA.h / 2;
+  other.x = other.tx = isHost ? ARENA.w * 0.7 : ARENA.w * 0.3;
+  other.y = other.ty = ARENA.h / 2;
+
+  showScreen(null);
+  $('hud').classList.remove('hidden');
+  $('hudText').textContent = isHost ? '✓ Conectado — você é o AZUL' : '✓ Conectado — você é o LARANJA';
+  gameOn = true;
+  lastTime = performance.now();
+  requestAnimationFrame(loop);
+}
+
+function onData(d) {
+  if (d.t === 'pos') { other.tx = d.x; other.ty = d.y; other.fx = d.fx; }
+}
+
+let lastSend = 0;
+function netSend(now) {
+  if (!conn || !connected) return;
+  if (now - lastSend < 1000 / SEND_HZ) return;
+  lastSend = now;
+  conn.send({ t: 'pos', x: Math.round(me.x), y: Math.round(me.y), fx: me.fx });
+}
+
+// ============ JOYSTICK VIRTUAL ============
+const joy = { active: false, id: null, ox: 0, oy: 0, dx: 0, dy: 0 };
+const JOY_MAX = 60; // raio em px de tela
+
+function joyStart(e) {
+  if (!gameOn || joy.active) return;
+  const t = e.changedTouches ? e.changedTouches[0] : e;
+  joy.active = true;
+  joy.id = t.identifier !== undefined ? t.identifier : 'mouse';
+  joy.ox = t.clientX; joy.oy = t.clientY;
+  joy.dx = 0; joy.dy = 0;
+}
+function joyMove(e) {
+  if (!joy.active) return;
+  const list = e.changedTouches || [e];
+  for (const t of list) {
+    const id = t.identifier !== undefined ? t.identifier : 'mouse';
+    if (id !== joy.id) continue;
+    let dx = t.clientX - joy.ox, dy = t.clientY - joy.oy;
+    const len = Math.hypot(dx, dy);
+    if (len > JOY_MAX) { dx = dx / len * JOY_MAX; dy = dy / len * JOY_MAX; }
+    joy.dx = dx; joy.dy = dy;
+  }
+}
+function joyEnd(e) {
+  if (!joy.active) return;
+  const list = e.changedTouches || [e];
+  for (const t of list) {
+    const id = t.identifier !== undefined ? t.identifier : 'mouse';
+    if (id === joy.id) { joy.active = false; joy.dx = 0; joy.dy = 0; }
+  }
+}
+window.addEventListener('touchstart', joyStart, { passive: false });
+window.addEventListener('touchmove', e => { e.preventDefault(); joyMove(e); }, { passive: false });
+window.addEventListener('touchend', joyEnd);
+window.addEventListener('touchcancel', joyEnd);
+// mouse (pra testar no PC)
+window.addEventListener('mousedown', joyStart);
+window.addEventListener('mousemove', joyMove);
+window.addEventListener('mouseup', joyEnd);
+
+// ============ CANVAS / RENDER ============
+const canvas = $('game');
+const ctx = canvas.getContext('2d');
+let scale = 1, offX = 0, offY = 0;
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = innerWidth * dpr;
+  canvas.height = innerHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  scale = Math.min(innerWidth / ARENA.w, innerHeight / ARENA.h);
+  offX = (innerWidth - ARENA.w * scale) / 2;
+  offY = (innerHeight - ARENA.h * scale) / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function drawPlayer(p, color, dark, name) {
+  const x = p.x, y = p.y;
+  // sombra
+  ctx.fillStyle = 'rgba(0,0,0,.3)';
+  ctx.beginPath(); ctx.ellipse(x, y + PLAYER_R - 4, PLAYER_R * .9, 9, 0, 0, 7); ctx.fill();
+  // corpo
+  ctx.fillStyle = color;
+  ctx.strokeStyle = dark; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(x, y, PLAYER_R, 0, 7); ctx.fill(); ctx.stroke();
+  // olhos (viram pro lado que anda)
+  const ex = p.fx * 8;
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(x - 8 + ex, y - 6, 7, 0, 7); ctx.arc(x + 8 + ex, y - 6, 7, 0, 7); ctx.fill();
+  ctx.fillStyle = '#222';
+  ctx.beginPath(); ctx.arc(x - 8 + ex * 1.4, y - 6, 3.2, 0, 7); ctx.arc(x + 8 + ex * 1.4, y - 6, 3.2, 0, 7); ctx.fill();
+  // nome
+  ctx.fillStyle = '#fff'; ctx.font = '700 15px system-ui';
+  ctx.textAlign = 'center';
+  ctx.fillText(name, x, y - PLAYER_R - 10);
+}
+
+function drawArena() {
+  // fundo fora da arena
+  ctx.fillStyle = '#120b28';
+  ctx.fillRect(-offX / scale, -offY / scale, innerWidth / scale, innerHeight / scale);
+  // chão
+  ctx.fillStyle = '#2e7d4f';
+  ctx.fillRect(0, 0, ARENA.w, ARENA.h);
+  // xadrez suave
+  ctx.fillStyle = 'rgba(255,255,255,.05)';
+  const T = 80;
+  for (let gy = 0; gy < ARENA.h / T; gy++)
+    for (let gx = 0; gx < ARENA.w / T; gx++)
+      if ((gx + gy) % 2 === 0) ctx.fillRect(gx * T, gy * T, T, T);
+  // borda
+  ctx.strokeStyle = '#ffd93d'; ctx.lineWidth = 8;
+  ctx.strokeRect(4, 4, ARENA.w - 8, ARENA.h - 8);
+}
+
+// ============ LOOP ============
+let lastTime = 0;
+function loop(now) {
+  if (!gameOn) return;
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+
+  // movimento local
+  if (joy.active && (joy.dx || joy.dy)) {
+    const nx = joy.dx / JOY_MAX, ny = joy.dy / JOY_MAX;
+    me.x += nx * SPEED * dt;
+    me.y += ny * SPEED * dt;
+    if (Math.abs(nx) > 0.15) me.fx = nx > 0 ? 1 : -1;
+  }
+  me.x = Math.max(PLAYER_R + 8, Math.min(ARENA.w - PLAYER_R - 8, me.x));
+  me.y = Math.max(PLAYER_R + 8, Math.min(ARENA.h - PLAYER_R - 8, me.y));
+
+  // interpola o remoto (suaviza a rede)
+  other.x += (other.tx - other.x) * Math.min(1, dt * 12);
+  other.y += (other.ty - other.y) * Math.min(1, dt * 12);
+
+  netSend(now);
+
+  // render
+  ctx.save();
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  ctx.translate(offX, offY);
+  ctx.scale(scale, scale);
+  drawArena();
+  const myColor = isHost ? ['#4fc3f7', '#0d47a1', 'P1'] : ['#ff8a65', '#bf360c', 'P2'];
+  const otColor = isHost ? ['#ff8a65', '#bf360c', 'P2'] : ['#4fc3f7', '#0d47a1', 'P1'];
+  drawPlayer(other, otColor[0], otColor[1], otColor[2]);
+  drawPlayer(me, myColor[0], myColor[1], myColor[2]);
+  ctx.restore();
+
+  // desenha joystick
+  if (joy.active) {
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(joy.ox, joy.oy, JOY_MAX, 0, 7); ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(joy.ox + joy.dx, joy.oy + joy.dy, 24, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// ============ BOTÕES ============
+$('btnHost').addEventListener('click', hostRoom);
+$('btnGoJoin').addEventListener('click', () => { $('joinMsg').textContent = ''; showScreen('join'); });
+$('btnJoin').addEventListener('click', () => {
+  const code = $('codeInput').value.trim().toUpperCase();
+  if (code.length === 4) joinRoom(code);
+  else $('joinMsg').textContent = 'O código tem 4 letras.';
+});
+$('btnCancelHost').addEventListener('click', () => { cleanupPeer(); showScreen('menu'); });
+$('btnCancelJoin').addEventListener('click', () => { cleanupPeer(); showScreen('menu'); });
+</script>
+</body>
+</html>
