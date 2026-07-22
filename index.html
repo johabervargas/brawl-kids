@@ -300,10 +300,10 @@ function onData(d){
       if(!g){ g={x:e[1],y:e[2],tx:e[1],ty:e[2],hp:e[3],et:e[4],ang:0}; guestEnemies.set(e[0],g); }
       else { g.tx=e[1]; g.ty=e[2]; g.hp=e[3]; g.et=e[4]; }
     }
-    for(const id of guestEnemies.keys()) if(!seen.has(id)){ const g=guestEnemies.get(id); spawnPoof(g.x,g.y,ETYPE[g.et].c,g.et===9?46:12); if(g.et===9) addShake(14); guestEnemies.delete(id); }
+    for(const id of guestEnemies.keys()) if(!seen.has(id)){ const g=guestEnemies.get(id); spawnPoof(g.x,g.y,ETYPE[g.et].c,g.et===9?46:12); if(g.et===9){ addShake(14); sfxBoss(); } else sfxDeath(); guestEnemies.delete(id); }
     guestBullets=d.b.map(b=>({x:b[0],y:b[1],vx:b[2],vy:b[3],k:b[4]}));
     const newFx=(d.x||[]).map(f=>({x:f[0],y:f[1],r:f[2],col:f[3]}));
-    if(newFx.length>guestEffects.length) addShake(9);
+    if(newFx.length>guestEffects.length){ addShake(9); sfxBoom(); }
     guestEffects=newFx;
   }
   else if(d.t==='restart'){ if(isHost) restartMatch(); }
@@ -349,6 +349,7 @@ window.addEventListener('mouseup',()=>{ mouseDown=false; stickMove.active=false;
 // botão de poder
 function triggerSpecial(){
   if(!gameOn) return;
+  audioInit(); sfxPower();
   if(isHost) sim.players[0].wantSpec=true;
   else { mySpecCount++; }
 }
@@ -389,13 +390,10 @@ function firePlayer(p,dt){
   const aiming=Math.hypot(p.aimx,p.aimy)>0.3;
   if(aiming && p.fireCd<=0){ p.fireCd=eff; spawnBullet(p, Math.atan2(p.aimy,p.aimx), null); }
 }
-function aimAngle(p){
-  if(Math.hypot(p.aimx,p.aimy)>0.3) return Math.atan2(p.aimy,p.aimx);
-  return p.fx>0 ? 0 : Math.PI;
-}
+function aimAngle(p){ return p.ang; }
 function addEffect(x,y,mr,col){ sim.effects.push({x,y,r:0,mr,life:0.4,ml:0.4,col}); }
 function explode(x,y,radius,dmg,col){
-  addEffect(x,y,radius,col); addShake(9); spawnPoof(x,y,col,16);
+  addEffect(x,y,radius,col); addShake(9); spawnPoof(x,y,col,16); sfxBoom();
   for(const e of sim.enemies){ const tt=ETYPE[e.ty];
     if((e.x-x)**2+(e.y-y)**2 < (radius+tt.r)**2){ e.hp-=dmg; e.flash=0.08; } }
 }
@@ -404,7 +402,7 @@ function activateSpecial(i){
   p.specCd=p.scd;
   const col=(CHARS[p.char]||CHARS.atirador).c;
   if(p.spec==='pound'){
-    addEffect(p.x,p.y,150,col); addShake(11);
+    addEffect(p.x,p.y,150,col); addShake(11); sfxBoom();
     for(const e of sim.enemies){ const t=ETYPE[e.ty];
       if((e.x-p.x)**2+(e.y-p.y)**2 < (150+t.r)**2){ e.hp-=70; e.flash=0.1;
         const a=Math.atan2(e.y-p.y,e.x-p.x); e.x+=Math.cos(a)*70; e.y+=Math.sin(a)*70; } }
@@ -486,7 +484,7 @@ function stepSim(dt){
         }
       }
     }
-    if(e.hp<=0){ spawnPoof(e.x,e.y,ETYPE[e.ty].c,e.ty===9?46:12); if(e.ty===9) addShake(14); sim.enemies.splice(i,1); }
+    if(e.hp<=0){ spawnPoof(e.x,e.y,ETYPE[e.ty].c,e.ty===9?46:12); if(e.ty===9){ addShake(14); sfxBoss(); } else sfxDeath(); sim.enemies.splice(i,1); }
   }
   // efeitos
   for(let i=sim.effects.length-1;i>=0;i--){
@@ -774,7 +772,13 @@ function render(){
     const s1=snap.p[1]; drawPlayer(guestLocal.x,guestLocal.y,guestLocal.fx,s1[3],s1[8],s1[4]/10,s1[5],1,s1[7]===1,guestLocal.ang);
   }
   drawParticles();
-  const [big,small]=bannerText();
+  // banner central: vitória/derrota/intervalo persistem; onda/chefe só piscam no início
+  let big=null, small=null;
+  const ws=curWaveState(); const wv=isHost?sim.wave:(snap?snap.w:0);
+  if(ws==='win'){ big='VITÓRIA! 🏆'; small='toque pra jogar de novo'; }
+  else if(ws==='lose'){ big='VOCÊS CAÍRAM'; small='toque pra tentar de novo'; }
+  else if(ws==='inter'){ big='PREPARAR...'; small=wv>=1?('onda '+wv+' vencida!'):'começando'; }
+  else if(performance.now()<flashUntil){ big=flashText; small=flashSub; }
   if(big){ ctx.textAlign='center';
     ctx.fillStyle='rgba(0,0,0,.35)'; ctx.fillRect(0,ARENA.h/2-70,ARENA.w,140);
     ctx.fillStyle='#ffd93d'; ctx.font='900 64px system-ui'; ctx.fillText(big,ARENA.w/2,ARENA.h/2+6);
@@ -782,6 +786,11 @@ function render(){
   }
   ctx.restore();
   drawStick(stickMove,'#4fc3f7'); drawStick(stickAim,'#ffd93d');
+  // contador de onda discreto (canto superior esquerdo)
+  if(ws==='fight'||ws==='boss'){
+    ctx.fillStyle='rgba(255,255,255,.55)'; ctx.font='800 14px system-ui'; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    ctx.fillText('Onda '+wv+'/'+WAVES.length, 12, 26);
+  }
   updateSpecBtn();
 }
 function updateSpecBtn(){
@@ -797,6 +806,56 @@ function updateSpecBtn(){
   btn.classList.toggle('cool', cd>0);
 }
 
+// ============ SOM (WebAudio procedural) ============
+let actx=null;
+function audioInit(){ try{ if(!actx) actx=new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume(); }catch(e){} }
+function blip(freq,dur,type,vol,slideTo){ if(!actx) return; const t=actx.currentTime;
+  const o=actx.createOscillator(),g=actx.createGain(); o.type=type||'square'; o.frequency.setValueAtTime(freq,t);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(slideTo,t+dur);
+  g.gain.setValueAtTime(vol||0.15,t); g.gain.exponentialRampToValueAtTime(0.0008,t+dur);
+  o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t+dur+0.02); }
+function noise(dur,vol,cut){ if(!actx) return; const t=actx.currentTime; const len=Math.floor(actx.sampleRate*dur);
+  const buf=actx.createBuffer(1,len,actx.sampleRate); const d=buf.getChannelData(0);
+  for(let i=0;i<len;i++) d[i]=Math.random()*2-1;
+  const n=actx.createBufferSource(); n.buffer=buf; const g=actx.createGain();
+  g.gain.setValueAtTime(vol||0.25,t); g.gain.exponentialRampToValueAtTime(0.0008,t+dur);
+  const f=actx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=cut||1400;
+  n.connect(f); f.connect(g); g.connect(actx.destination); n.start(t); n.stop(t+dur+0.02); }
+function sfxShoot(){ blip(760,0.07,'square',0.06,320); }
+function sfxDeath(){ noise(0.18,0.20,1600); blip(200,0.16,'sawtooth',0.11,70); }
+function sfxBoss(){ noise(0.5,0.32,900); blip(110,0.5,'sawtooth',0.2,38); }
+function sfxBoom(){ noise(0.32,0.30,1000); blip(150,0.26,'sawtooth',0.17,48); }
+function sfxPower(){ blip(380,0.22,'triangle',0.18,920); }
+function sfxWave(){ blip(520,0.12,'square',0.14,720); setTimeout(()=>blip(720,0.12,'square',0.12,900),120); }
+function sfxWin(){ [523,659,784,1047].forEach((f,i)=>setTimeout(()=>blip(f,0.2,'triangle',0.16),i*140)); }
+function sfxLose(){ [400,300,200].forEach((f,i)=>setTimeout(()=>blip(f,0.25,'sawtooth',0.15,f*0.7),i*160)); }
+function sfxHurt(){ blip(170,0.1,'square',0.09,90); }
+
+let prevWs=null, flashText=null, flashSub=null, flashUntil=0, localFireSnd=0, prevLocalHp=999;
+function localShootSound(dt){
+  const aiming=Math.hypot(stickAim.dx,stickAim.dy)>AIM_DEAD;
+  let fire=0.2, buff=false, downed=false;
+  if(isHost){ const p=sim.players[0]; fire=p.fire; buff=p.buffT>0; downed=p.downT>0; }
+  else { fire=(CHARS[myCharId]||CHARS.atirador).fire; const s1=snap?snap.p[1]:null; buff=s1&&s1[7]===1; downed=s1&&s1[4]>0; }
+  if(downed){ localFireSnd=0; return; }
+  localFireSnd-=dt;
+  if(aiming && localFireSnd<=0){ sfxShoot(); localFireSnd=buff?fire*0.5:fire; }
+}
+function updateAudioEvents(){
+  const ws=curWaveState();
+  if(ws!==prevWs){
+    if(ws==='fight'||ws==='boss'){ const w=isHost?sim.wave:(snap?snap.w:0);
+      flashText=ws==='boss'?'CHEFE!':'ONDA '+w; flashSub=ws==='boss'?'derrotem juntos!':null;
+      flashUntil=performance.now()+1600; sfxWave(); }
+    else if(ws==='win') sfxWin();
+    else if(ws==='lose') sfxLose();
+    prevWs=ws;
+  }
+  const hp=isHost?sim.players[0].hp:(snap?snap.p[1][3]:prevLocalHp);
+  if(hp<prevLocalHp-3) sfxHurt();
+  prevLocalHp=hp;
+}
+
 // ============ LOOP ============
 let lastTime=0;
 function loop(now){
@@ -805,13 +864,15 @@ function loop(now){
   if(isHost){ stepSim(dt); broadcastSnap(now); }
   else { guestStep(dt); guestSend(now); }
   updateClientFx(dt);
+  localShootSound(dt);
+  updateAudioEvents();
   render();
   requestAnimationFrame(loop);
 }
 
 // ============ BOTÕES ============
-$('btnHost').addEventListener('click',()=>{ goFullscreen(); hostRoom(); });
-$('btnGoJoin').addEventListener('click',()=>{ goFullscreen(); $('joinMsg').textContent=''; showScreen('join'); });
+$('btnHost').addEventListener('click',()=>{ audioInit(); goFullscreen(); hostRoom(); });
+$('btnGoJoin').addEventListener('click',()=>{ audioInit(); goFullscreen(); $('joinMsg').textContent=''; showScreen('join'); });
 $('btnJoin').addEventListener('click',()=>{ const code=$('codeInput').value.trim().toUpperCase();
   if(code.length===4) joinRoom(code); else $('joinMsg').textContent='O código tem 4 letras.'; });
 $('btnReady').addEventListener('click',onReady);
