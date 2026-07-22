@@ -58,7 +58,7 @@
 
   /* botão de poder no jogo */
   #specBtn { position:fixed; right:calc(env(safe-area-inset-right,0px) + 24px);
-    bottom:calc(env(safe-area-inset-bottom,0px) + 96px); z-index:15;
+    bottom:calc(env(safe-area-inset-bottom,0px) + 96px); z-index:15; pointer-events:none;
     width:78px; height:78px; border-radius:50%;
     border:4px solid #fff; background:#673ab7; color:#fff; font-size:32px; cursor:pointer;
     display:flex; align-items:center; justify-content:center; box-shadow:0 4px 12px rgba(0,0,0,.5); }
@@ -280,6 +280,7 @@ let lastSend=0, lastSnap=0;
 const guestInput={ x:ARENA.w*0.65, y:ARENA.h/2, fx:1, ax:0, ay:0, f:false, sp:0, spAng:0 };
 
 function onData(d){
+ try {
   if(d.t==='pick'){ otherPick=d.c; otherReady=d.r; refreshCards(); maybeStart(); }
   else if(d.t==='start'){ // convidado inicia
     otherCharId=d.h; myCharId=d.g;
@@ -307,6 +308,7 @@ function onData(d){
     guestEffects=newFx;
   }
   else if(d.t==='restart'){ if(isHost) restartMatch(); }
+ } catch(e){ /* ignora mensagem malformada */ }
 }
 function restartMatch(){ beginMatch(); }
 
@@ -318,17 +320,20 @@ function isBtn(t){ return t.target && t.target.tagName==='BUTTON'; }
 function pickStick(x){ return x<innerWidth/2 ? stickMove : stickAim; }
 function touchStart(e){
   if(!gameOn) return;
+  audioInit();
   for(const t of e.changedTouches){
     if(isBtn(t)) continue;
+    if(!specAim.active && localSpecCd()<=0 && inSpecRegion(t.clientX,t.clientY)){
+      specAim.active=true; specAim.id=t.identifier; specAim.ox=t.clientX; specAim.oy=t.clientY; specAim.dx=0; specAim.dy=0; continue;
+    }
     const s=pickStick(t.clientX); if(s.active) continue;
     s.active=true; s.id=t.identifier; s.ox=t.clientX; s.oy=t.clientY; s.dx=0; s.dy=0;
   }
 }
 function touchMove(e){
-  if(specAim.active){ const r=$('specBtn').getBoundingClientRect(); const ox=r.left+r.width/2, oy=r.top+r.height/2;
-    for(const t of e.changedTouches){ if(t.identifier!==specAim.id) continue;
-      let dx=t.clientX-ox, dy=t.clientY-oy; const len=Math.hypot(dx,dy); const M=75;
-      if(len>M){ dx=dx/len*M; dy=dy/len*M; } specAim.dx=dx; specAim.dy=dy; } }
+  if(specAim.active) for(const t of e.changedTouches){ if(t.identifier!==specAim.id) continue;
+    let dx=t.clientX-specAim.ox, dy=t.clientY-specAim.oy; const len=Math.hypot(dx,dy); const M=75;
+    if(len>M){ dx=dx/len*M; dy=dy/len*M; } specAim.dx=dx; specAim.dy=dy; }
   for(const t of e.changedTouches) for(const s of [stickMove,stickAim]){
     if(!s.active||s.id!==t.identifier) continue;
     let dx=t.clientX-s.ox, dy=t.clientY-s.oy; const len=Math.hypot(dx,dy);
@@ -350,7 +355,8 @@ window.addEventListener('touchmove',e=>{ e.preventDefault(); touchMove(e); },{pa
 window.addEventListener('touchend',touchEnd);
 window.addEventListener('touchcancel',touchEnd);
 let mouseDown=false;
-window.addEventListener('mousedown',e=>{ if(!gameOn) return; handleTapOverlay(); if(e.target&&e.target.tagName==='BUTTON') return;
+window.addEventListener('mousedown',e=>{ if(!gameOn) return; handleTapOverlay(); audioInit(); if(e.target&&e.target.tagName==='BUTTON') return;
+  if(localSpecCd()<=0 && inSpecRegion(e.clientX,e.clientY)){ fireSpecial(null); return; }
   mouseDown=true; const s=stickMove; s.active=true; s.id='m'; s.ox=e.clientX; s.oy=e.clientY; s.dx=0; s.dy=0; });
 window.addEventListener('mousemove',e=>{ if(!mouseDown) return; const s=stickMove; let dx=e.clientX-s.ox,dy=e.clientY-s.oy; const l=Math.hypot(dx,dy); if(l>JOY_MAX){dx=dx/l*JOY_MAX;dy=dy/l*JOY_MAX;} s.dx=dx; s.dy=dy; });
 window.addEventListener('mouseup',()=>{ mouseDown=false; stickMove.active=false; stickMove.dx=0; stickMove.dy=0; });
@@ -363,19 +369,16 @@ function triggerSpecial(){
   else { mySpecCount++; }
 }
 // botão de poder = joystick de mira (arrasta pra mirar, solta pra disparar)
-const specAim={active:false,id:null,dx:0,dy:0};
+const specAim={active:false,id:null,ox:0,oy:0,dx:0,dy:0};
 function localSpecCd(){ if(isHost) return sim.players[0].specCd; return snap?snap.p[1][6]/10:0; }
+function inSpecRegion(x,y){ const r=$('specBtn').getBoundingClientRect(); const pad=18;
+  return x>=r.left-pad && x<=r.right+pad && y>=r.top-pad && y<=r.bottom+pad; }
 function fireSpecial(ang){
   if(localSpecCd()>0) return;
   audioInit(); sfxPower();
   if(isHost){ const p=sim.players[0]; p.specAngle=(ang===null?p.ang:ang); p.wantSpec=true; }
   else { mySpecAngle=(ang===null?guestLocal.ang:ang); mySpecCount++; }
 }
-$('specBtn').addEventListener('touchstart',e=>{ e.preventDefault(); e.stopPropagation(); audioInit();
-  if(!gameOn||localSpecCd()>0) return;
-  const t=e.changedTouches[0]; specAim.active=true; specAim.id=t.identifier; specAim.dx=0; specAim.dy=0;
-},{passive:false});
-$('specBtn').addEventListener('mousedown',e=>{ e.stopPropagation(); audioInit(); fireSpecial(null); });
 
 // reiniciar ao tocar em vitória/derrota
 function requestRestart(){ if(isHost) restartMatch(); else if(conn) conn.send({t:'restart'}); }
@@ -898,12 +901,14 @@ let lastTime=0;
 function loop(now){
   if(!gameOn) return;
   const dt=Math.min((now-lastTime)/1000,0.05); lastTime=now;
-  if(isHost){ stepSim(dt); broadcastSnap(now); }
-  else { guestStep(dt); guestSend(now); }
-  updateClientFx(dt);
-  localShootSound(dt);
-  updateAudioEvents();
-  render();
+  try {
+    if(isHost){ stepSim(dt); broadcastSnap(now); }
+    else { guestStep(dt); guestSend(now); }
+    updateClientFx(dt);
+    localShootSound(dt);
+    updateAudioEvents();
+    render();
+  } catch(err){ /* nunca deixa o jogo travar */ }
   requestAnimationFrame(loop);
 }
 
