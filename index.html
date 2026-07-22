@@ -273,11 +273,11 @@ let myCharId='atirador', otherCharId='atirador';
 let snap=null;
 const guestEnemies=new Map(); let guestBullets=[]; let guestEffects=[];
 const guestLocal={ x:ARENA.w*0.65, y:ARENA.h/2, fx:1, speed:300, ang:0 };
-let mySpecCount=0;
+let mySpecCount=0, mySpecAngle=0;
 
 // ============ MENSAGENS ============
 let lastSend=0, lastSnap=0;
-const guestInput={ x:ARENA.w*0.65, y:ARENA.h/2, fx:1, ax:0, ay:0, f:false, sp:0 };
+const guestInput={ x:ARENA.w*0.65, y:ARENA.h/2, fx:1, ax:0, ay:0, f:false, sp:0, spAng:0 };
 
 function onData(d){
   if(d.t==='pick'){ otherPick=d.c; otherReady=d.r; refreshCards(); maybeStart(); }
@@ -290,7 +290,7 @@ function onData(d){
   }
   else if(d.t==='in'){
     guestInput.x=d.x; guestInput.y=d.y; guestInput.fx=d.fx;
-    guestInput.ax=d.ax; guestInput.ay=d.ay; guestInput.f=d.f; guestInput.sp=d.sp;
+    guestInput.ax=d.ax; guestInput.ay=d.ay; guestInput.f=d.f; guestInput.sp=d.sp; guestInput.spAng=(d.spa||0)/100;
   }
   else if(d.t==='snap'){
     snap=d;
@@ -325,6 +325,10 @@ function touchStart(e){
   }
 }
 function touchMove(e){
+  if(specAim.active){ const r=$('specBtn').getBoundingClientRect(); const ox=r.left+r.width/2, oy=r.top+r.height/2;
+    for(const t of e.changedTouches){ if(t.identifier!==specAim.id) continue;
+      let dx=t.clientX-ox, dy=t.clientY-oy; const len=Math.hypot(dx,dy); const M=75;
+      if(len>M){ dx=dx/len*M; dy=dy/len*M; } specAim.dx=dx; specAim.dy=dy; } }
   for(const t of e.changedTouches) for(const s of [stickMove,stickAim]){
     if(!s.active||s.id!==t.identifier) continue;
     let dx=t.clientX-s.ox, dy=t.clientY-s.oy; const len=Math.hypot(dx,dy);
@@ -333,6 +337,11 @@ function touchMove(e){
   }
 }
 function touchEnd(e){
+  if(specAim.active) for(const t of e.changedTouches){ if(t.identifier!==specAim.id) continue;
+    const mag=Math.hypot(specAim.dx,specAim.dy);
+    fireSpecial(mag>10 ? Math.atan2(specAim.dy,specAim.dx) : null);
+    specAim.active=false; specAim.id=null; specAim.dx=0; specAim.dy=0;
+  }
   for(const t of e.changedTouches) for(const s of [stickMove,stickAim])
     if(s.active&&s.id===t.identifier){ s.active=false; s.dx=0; s.dy=0; }
 }
@@ -353,8 +362,20 @@ function triggerSpecial(){
   if(isHost) sim.players[0].wantSpec=true;
   else { mySpecCount++; }
 }
-$('specBtn').addEventListener('touchstart',e=>{ e.preventDefault(); e.stopPropagation(); triggerSpecial(); },{passive:false});
-$('specBtn').addEventListener('mousedown',e=>{ e.stopPropagation(); triggerSpecial(); });
+// botão de poder = joystick de mira (arrasta pra mirar, solta pra disparar)
+const specAim={active:false,id:null,dx:0,dy:0};
+function localSpecCd(){ if(isHost) return sim.players[0].specCd; return snap?snap.p[1][6]/10:0; }
+function fireSpecial(ang){
+  if(localSpecCd()>0) return;
+  audioInit(); sfxPower();
+  if(isHost){ const p=sim.players[0]; p.specAngle=(ang===null?p.ang:ang); p.wantSpec=true; }
+  else { mySpecAngle=(ang===null?guestLocal.ang:ang); mySpecCount++; }
+}
+$('specBtn').addEventListener('touchstart',e=>{ e.preventDefault(); e.stopPropagation(); audioInit();
+  if(!gameOn||localSpecCd()>0) return;
+  const t=e.changedTouches[0]; specAim.active=true; specAim.id=t.identifier; specAim.dx=0; specAim.dy=0;
+},{passive:false});
+$('specBtn').addEventListener('mousedown',e=>{ e.stopPropagation(); audioInit(); fireSpecial(null); });
 
 // reiniciar ao tocar em vitória/derrota
 function requestRestart(){ if(isHost) restartMatch(); else if(conn) conn.send({t:'restart'}); }
@@ -397,8 +418,9 @@ function explode(x,y,radius,dmg,col){
   for(const e of sim.enemies){ const tt=ETYPE[e.ty];
     if((e.x-x)**2+(e.y-y)**2 < (radius+tt.r)**2){ e.hp-=dmg; e.flash=0.08; } }
 }
-function activateSpecial(i){
+function activateSpecial(i,ang){
   const p=sim.players[i]; if(p.downT>0||p.specCd>0) return;
+  if(ang===null||ang===undefined) ang=p.ang;
   p.specCd=p.scd;
   const col=(CHARS[p.char]||CHARS.atirador).c;
   if(p.spec==='pound'){
@@ -407,10 +429,9 @@ function activateSpecial(i){
       if((e.x-p.x)**2+(e.y-p.y)**2 < (150+t.r)**2){ e.hp-=70; e.flash=0.1;
         const a=Math.atan2(e.y-p.y,e.x-p.x); e.x+=Math.cos(a)*70; e.y+=Math.sin(a)*70; } }
   } else if(p.spec==='burst'){
-    const base=aimAngle(p);
-    for(let k=-2;k<=2;k++) spawnBullet(p, base + k*0.18, null);
+    for(let k=-2;k<=2;k++) spawnBullet(p, ang + k*0.18, null);
   } else if(p.spec==='fireball'){
-    spawnBullet(p, aimAngle(p), 'fire');
+    spawnBullet(p, ang, 'fire');
   } else if(p.spec==='turbo'){
     p.buffT=4;
   }
@@ -429,7 +450,7 @@ function stepSim(dt){
       if(am>AIM_DEAD){ p.aimx=stickAim.dx/am; p.aimy=stickAim.dy/am; if(Math.abs(p.aimx)>0.2) p.fx=p.aimx>0?1:-1; }
       else { p.aimx=0; p.aimy=0; }
     }
-    if(p.wantSpec){ activateSpecial(0); p.wantSpec=false; }
+    if(p.wantSpec){ activateSpecial(0, p.specAngle); p.wantSpec=false; }
   }
   // input convidado
   { const p=P[1];
@@ -437,7 +458,7 @@ function stepSim(dt){
       p.x=guestInput.x; p.y=guestInput.y; p.fx=guestInput.fx;
       p.aimx=guestInput.f?guestInput.ax:0; p.aimy=guestInput.f?guestInput.ay:0;
     }
-    if(guestInput.sp>p.specSeen){ p.specSeen=guestInput.sp; activateSpecial(1); }
+    if(guestInput.sp>p.specSeen){ p.specSeen=guestInput.sp; activateSpecial(1, guestInput.spAng); }
   }
   // por jogador
   for(const p of P){
@@ -567,7 +588,7 @@ function guestSend(now){
   let ax=0,ay=0,f=false; const am=Math.hypot(stickAim.dx,stickAim.dy);
   if(am>AIM_DEAD){ ax=stickAim.dx/am; ay=stickAim.dy/am; f=true; }
   let fx=guestLocal.fx; if(f&&Math.abs(ax)>0.2) fx=ax>0?1:-1;
-  conn.send({ t:'in', x:Math.round(guestLocal.x), y:Math.round(guestLocal.y), fx, ax, ay, f, sp:mySpecCount });
+  conn.send({ t:'in', x:Math.round(guestLocal.x), y:Math.round(guestLocal.y), fx, ax, ay, f, sp:mySpecCount, spa:Math.round(mySpecAngle*100) });
 }
 
 // ============ RENDER ============
@@ -772,6 +793,22 @@ function render(){
     const s1=snap.p[1]; drawPlayer(guestLocal.x,guestLocal.y,guestLocal.fx,s1[3],s1[8],s1[4]/10,s1[5],1,s1[7]===1,guestLocal.ang);
   }
   drawParticles();
+  // seta de mira do poder (enquanto arrasta o botão)
+  if(specAim.active){
+    let lx,ly,fb,downed;
+    if(isHost){ const p=sim.players[0]; lx=p.x; ly=p.y; fb=p.ang; downed=p.downT>0; }
+    else { lx=guestLocal.x; ly=guestLocal.y; fb=guestLocal.ang; downed=snap&&snap.p[1][4]>0; }
+    if(!downed){
+      const mag=Math.hypot(specAim.dx,specAim.dy);
+      const a=mag>10?Math.atan2(specAim.dy,specAim.dx):fb;
+      const L=220, ex=lx+Math.cos(a)*L, ey=ly+Math.sin(a)*L;
+      ctx.save(); ctx.strokeStyle='rgba(255,217,61,.85)'; ctx.lineWidth=6; ctx.setLineDash([16,12]); ctx.lineCap='round';
+      ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(ex,ey); ctx.stroke(); ctx.setLineDash([]); ctx.lineCap='butt';
+      ctx.translate(ex,ey); ctx.rotate(a); ctx.fillStyle='rgba(255,217,61,.95)';
+      ctx.beginPath(); ctx.moveTo(6,0); ctx.lineTo(-22,-13); ctx.lineTo(-22,13); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
   // banner central: vitória/derrota/intervalo persistem; onda/chefe só piscam no início
   let big=null, small=null;
   const ws=curWaveState(); const wv=isHost?sim.wave:(snap?snap.w:0);
